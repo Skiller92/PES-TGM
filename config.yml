@@ -1,0 +1,128 @@
+# Javascript Node CircleCI 2.0 configuration file
+#
+version: 2
+jobs:
+  build:
+    docker:
+      # specify the version you desire here
+      - image: circleci/node:9.9
+
+      # Specify service dependencies here if necessary
+      # CircleCI maintains a library of pre-built images
+      # documented at https://circleci.com/docs/2.0/circleci-images/
+      # - image: circleci/mongo:3.4.4
+
+    working_directory: ~/repo
+
+    steps:
+      - checkout
+      ### ANGULAR PORTION ###
+
+      - restore_cache:
+          keys:
+            - angular-dependencies-{{ checksum "closetr-web/package.json" }}
+            - angular-dependencies-
+
+      - run:
+          name: Installing Node Modules for Angular
+          command: |
+            cd closetr-web
+            npm install
+
+      - save_cache:
+          paths:
+            - closetr-web/node_modules
+          key: angular-dependencies-{{ checksum "closetr-web/package.json" }}
+
+      - run:
+          name: Building Frontend from Angular
+          command: |
+            cd closetr-web
+            npm rebuild node-sass
+            npm run-script build
+
+      - save_cache:
+          name: Cache the dist folder for the deploy job
+          key: angular-dist-{{ .Environment.CIRCLE_BRANCH }}-{{ .Environment.CIRCLE_SHA1 }}
+          paths:
+            - closetr-web/dist
+
+
+      ### NODE/EXPRESS PORTION ###
+
+      - restore_cache:
+          keys:
+            - express-dependencies-{{ checksum "closetr-api/package.json" }}
+            - express-dependencies-
+
+      - run:
+          name: Installing Node Modules for Express
+          command: |
+            cd closetr-api
+            npm install
+
+      - save_cache:
+          paths:
+            - closetr-api/node_modules
+          key: express-dependencies-{{ checksum "closetr-api/package.json" }}
+
+      - save_cache:
+          name: Caching API Manifest for the deploy job
+          paths:
+            - closetr-api
+          key: express-manifest-{{ .Environment.CIRCLE_BRANCH }}-{{ .Environment.CIRCLE_SHA1 }}
+
+      - persist_to_workspace:
+          root: ~/repo
+          paths:
+            - closetr-web
+
+  deploy:
+    docker:
+      - image: buildpack-deps:trusty
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ~/repo
+      ### ANGULAR PORTION ###
+      - restore_cache:
+          name: Restoring node_modules for web
+          keys:
+            - angular-dependencies-{{ checksum "closetr-web/package.json" }}
+            - angular-dependencies-
+
+      - restore_cache:
+          name: Restoring web dist folder
+          keys:
+            - angular-dist-{{ .Environment.CIRCLE_BRANCH }}-{{ .Environment.CIRCLE_SHA1 }}
+            # fallback to using the latest cache if no exact match is found
+            - angular-dist-
+      - run:
+          name: Deploying Front-End to Heroku
+          command: |
+            git push https://heroku:$HEROKU_API_KEY@git.heroku.com/$HEROKU_APP_FRONTEND_NAME.git `git subtree split --prefix closetr-web master`:master --force
+      
+      ### NODE/EXPRESS PORTION ###
+      - restore_cache:
+          name: Restoring API manifest from the build job
+          keys:
+            - express-manifest-{{ .Environment.CIRCLE_BRANCH }}-{{ .Environment.CIRCLE_SHA1 }}
+            # fallback to using the latest cache if no exact match is found
+            - express-manifest-
+      - run:
+          name: Deploying API to Heroku
+          command: |
+            git push https://heroku:$HEROKU_API_KEY@git.heroku.com/$HEROKU_APP_BACKEND_NAME.git `git subtree split --prefix closetr-api master`:master --force
+
+workflows:
+  version: 2
+  build-deploy:
+    jobs:
+      - build
+      - deploy:
+          requires:
+            - build
+          filters:
+            branches:
+              only: master
